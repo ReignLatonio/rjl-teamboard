@@ -109,6 +109,21 @@
   .mentionBanner .mrow{ display:flex; justify-content:space-between; align-items:center; gap:10px; cursor:pointer; }
   .mentionBanner .mrow:hover{ opacity:.85; }
 
+  .mentionInputWrap{ position:relative; }
+  .mentionDropdown{
+    position:absolute; bottom:calc(100% + 6px); left:0; width:100%; max-height:180px; overflow-y:auto;
+    background:#171727; border:1px solid var(--stroke); border-radius:12px; padding:6px; z-index:70;
+    box-shadow:0 -10px 30px rgba(0,0,0,.4);
+  }
+  .mentionOption{
+    padding:8px 10px; border-radius:8px; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:8px;
+  }
+  .mentionOption:hover, .mentionOption.active{ background:rgba(255,46,99,.15); color:var(--pink); }
+  .mentionOption .initials{
+    width:22px; height:22px; border-radius:50%; background:linear-gradient(135deg,var(--purple),var(--teal));
+    display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:800;
+  }
+
   main{ padding:10px clamp(18px,4vw,48px) 60px; max-width:1400px; margin:0 auto; }
   .section-title{ display:flex; align-items:center; gap:10px; margin:30px 0 16px; }
 
@@ -406,9 +421,11 @@
       </div>
     </div>
     <div class="commentlist" id="commentList"></div>
-    <textarea id="commentInput" placeholder="Add a comment…"></textarea>
+    <div class="mentionInputWrap">
+      <textarea id="commentInput" placeholder="Add a comment… (type @ to mention someone)"></textarea>
+      <div class="mentionDropdown hidden" id="mentionDropdown"></div>
+    </div>
     <div class="modal-actions">
-      <button class="btn secondary" id="mentionAssigneeBtn" style="width:auto;">@ Mention assignee</button>
       <button class="btn" id="commentSubmit">Post Comment</button>
     </div>
   </div>
@@ -949,15 +966,65 @@ async function loadComments(taskId){
   if (!data || !data.length) list.innerHTML = `<div class="empty">No comments yet.</div>`;
 }
 
-$("#mentionAssigneeBtn").onclick = () => {
-  if (!openTaskData) return;
-  const tag = "@" + nameFor(openTaskData.assignee_id) + " ";
-  const box = $("#commentInput");
-  if (!box.value.includes(tag)) {
-    box.value = tag + box.value;
+// ---------- @Mention autocomplete ----------
+let mentionActive = false;
+let mentionStartIndex = -1;
+
+function getCaretWord(text, caretPos) {
+  const upToCaret = text.slice(0, caretPos);
+  const atIndex = upToCaret.lastIndexOf("@");
+  if (atIndex === -1) return null;
+  const between = upToCaret.slice(atIndex + 1);
+  if (/\s/.test(between)) return null; // a space ends the @mention attempt
+  return { atIndex, query: between.toLowerCase() };
+}
+
+$("#commentInput").addEventListener("input", (e) => {
+  const box = e.target;
+  const caretPos = box.selectionStart;
+  const found = getCaretWord(box.value, caretPos);
+
+  if (!found) {
+    mentionActive = false;
+    $("#mentionDropdown").classList.add("hidden");
+    return;
   }
-  box.focus();
-};
+
+  mentionActive = true;
+  mentionStartIndex = found.atIndex;
+  const matches = allProfiles.filter(p => p.name.toLowerCase().includes(found.query));
+
+  const dropdown = $("#mentionDropdown");
+  if (!matches.length) {
+    dropdown.classList.add("hidden");
+    return;
+  }
+
+  dropdown.innerHTML = matches.map(p => `
+    <div class="mentionOption" data-name="${p.name}">
+      <div class="initials">${initials(p.name)}</div>
+      <span>${p.name}</span>
+    </div>
+  `).join("");
+  dropdown.classList.remove("hidden");
+
+  dropdown.querySelectorAll(".mentionOption").forEach(opt => {
+    opt.onclick = () => {
+      const name = opt.dataset.name;
+      const before = box.value.slice(0, mentionStartIndex);
+      const after = box.value.slice(caretPos);
+      box.value = before + "@" + name + " " + after;
+      dropdown.classList.add("hidden");
+      mentionActive = false;
+      box.focus();
+    };
+  });
+});
+
+$("#commentInput").addEventListener("blur", () => {
+  // small delay so a click on a dropdown option still registers first
+  setTimeout(() => $("#mentionDropdown").classList.add("hidden"), 150);
+});
 
 $("#commentSubmit").onclick = async () => {
   const body = $("#commentInput").value.trim();
@@ -968,13 +1035,16 @@ $("#commentSubmit").onclick = async () => {
     .select()
     .single();
 
-  // If this comment @mentions the assignee (and it's not the assignee
-  // commenting on their own task), create + email a notification.
-  const assigneeName = nameFor(openTaskData.assignee_id);
-  const mentionsAssignee = body.toLowerCase().includes("@" + assigneeName.toLowerCase());
-  if (mentionsAssignee && openTaskData.assignee_id !== currentUser.id) {
+  // Find every team member actually @mentioned in this comment,
+  // not just the assignee, and notify each one.
+  const lowerBody = body.toLowerCase();
+  const mentionedProfiles = allProfiles.filter(p =>
+    p.id !== currentUser.id && lowerBody.includes("@" + p.name.toLowerCase())
+  );
+
+  for (const recipient of mentionedProfiles) {
     await sb.from("notifications").insert({
-      recipient_id: openTaskData.assignee_id,
+      recipient_id: recipient.id,
       sender_id: currentUser.id,
       task_id: openTaskId,
       comment_id: newComment ? newComment.id : null,
@@ -982,13 +1052,12 @@ $("#commentSubmit").onclick = async () => {
       status: "unread"
     });
 
-    const recipientProfile = allProfiles.find(p => p.id === openTaskData.assignee_id);
-    if (recipientProfile && recipientProfile.email) {
+    if (recipient.email) {
       try {
         await sb.functions.invoke("notify-mention", {
           body: {
-            recipientEmail: recipientProfile.email,
-            recipientName: recipientProfile.name,
+            recipientEmail: recipient.email,
+            recipientName: recipient.name,
             senderName: currentUser.name,
             taskTitle: openTaskData.title,
             commentBody: body
@@ -998,15 +1067,13 @@ $("#commentSubmit").onclick = async () => {
     }
   }
 
-  // If the ASSIGNEE is the one commenting, treat it as their reply and
-  // clear any pending notifications addressed to them for this task.
-  if (openTaskData.assignee_id === currentUser.id) {
-    await sb.from("notifications")
-      .update({ status: "acknowledged" })
-      .eq("task_id", openTaskId)
-      .eq("recipient_id", currentUser.id)
-      .eq("status", "unread");
-  }
+  // Commenting on a task clears any of YOUR OWN pending mentions on it,
+  // since replying counts as acknowledging.
+  await sb.from("notifications")
+    .update({ status: "acknowledged" })
+    .eq("task_id", openTaskId)
+    .eq("recipient_id", currentUser.id)
+    .eq("status", "unread");
 
   $("#commentInput").value = "";
   await loadComments(openTaskId);
