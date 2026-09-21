@@ -207,6 +207,26 @@
   .attachRow input[type=text]:focus{ border-color:var(--pink); }
   .attachStatus{ font-size:11px; color:var(--muted); }
 
+  .attachmentsSection{ margin:14px 0 18px; }
+  .attachmentsHead{
+    display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;
+    font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+  }
+  .attachmentsHead .btn{ font-size:11px; padding:6px 12px; }
+  .attachmentsList{ display:flex; flex-direction:column; gap:6px; margin-bottom:6px; }
+  .attachmentItem{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    background:rgba(255,46,99,.06); border:1px solid rgba(255,46,99,.2); border-radius:10px; padding:8px 10px; font-size:12px;
+  }
+  .attachmentItem a{ color:var(--pink); text-decoration:none; flex:1; }
+  .attachmentItem a:hover{ text-decoration:underline; }
+  .attachmentItem .addedBy{ color:var(--muted); font-size:10px; }
+  .attachmentItem .delAttach{
+    background:none; border:none; color:var(--muted); cursor:pointer; font-size:11px;
+  }
+  .attachmentItem .delAttach:hover{ color:var(--pink); }
+  .attachmentsEmpty{ color:var(--muted); font-size:12px; opacity:.7; }
+
   .card .attachment{
     display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--pink);
     margin-top:8px; text-decoration:none; padding:4px 10px; border-radius:999px;
@@ -416,21 +436,33 @@
     <div class="editTaskForm hidden" id="editTaskForm">
       <input type="text" id="editTitleInput" placeholder="Task title">
       <input type="date" id="editDueInput">
-
-      <div class="attachTabs">
-        <button type="button" class="attachTab active" id="editAttachTabLink">Attach Link</button>
-        <button type="button" class="attachTab" id="editAttachTabFile">Attach File</button>
-      </div>
-      <input type="text" id="editAttachLinkInput" placeholder="Paste a Google Drive / Docs / any link">
-      <input type="file" id="editAttachFileInput" class="hidden">
-      <div class="attachStatus" id="editAttachStatus"></div>
-      <div class="attachStatus" id="editAttachCurrent"></div>
-
       <div class="modal-actions">
         <button class="btn secondary" id="editCancelBtn" style="width:auto;">Cancel</button>
         <button class="btn" id="editSaveBtn" style="width:auto;">Save changes</button>
       </div>
     </div>
+
+    <div class="attachmentsSection">
+      <div class="attachmentsHead">
+        <span>Attachments</span>
+        <button class="btn secondary" id="addAttachmentBtn" style="width:auto;">+ Add attachment</button>
+      </div>
+      <div class="attachmentsList" id="attachmentsList"></div>
+      <div class="attachRow hidden" id="modalAttachRow">
+        <div class="attachTabs">
+          <button type="button" class="attachTab active" id="modalAttachTabLink">Attach Link</button>
+          <button type="button" class="attachTab" id="modalAttachTabFile">Attach File</button>
+        </div>
+        <input type="text" id="modalAttachLinkInput" placeholder="Paste a Google Drive / Docs / any link">
+        <input type="file" id="modalAttachFileInput" class="hidden">
+        <div class="attachStatus" id="modalAttachStatus"></div>
+        <div class="modal-actions">
+          <button class="btn secondary" id="modalAttachCancelBtn" style="width:auto;">Cancel</button>
+          <button class="btn" id="modalAttachSaveBtn" style="width:auto;">Save attachment</button>
+        </div>
+      </div>
+    </div>
+
     <div class="commentlist" id="commentList"></div>
     <div class="mentionInputWrap">
       <textarea id="commentInput" placeholder="Add a comment… (type @ to mention someone)"></textarea>
@@ -762,7 +794,7 @@ function cardEl(task){
     <div class="meta"><span class="assignee"></span><span class="due">${due}</span></div>
     <div class="whoinfo">Assigned to <b></b> · Created by <b></b></div>
     ${!mine ? `<div class="lockicon">🔒 you can view this, but only ${nameFor(task.assignee_id)} or its creator can move or delete it</div>` : ""}
-    ${task.attachment_url ? `<a class="attachment" href="${task.attachment_url}" target="_blank" rel="noopener">${task.attachment_type === 'file' ? '📎' : '🔗'} ${task.attachment_name || 'Attachment'}</a>` : ""}
+    <div class="attachcount" data-id="${task.id}"></div>
     <div class="commentcount" data-id="${task.id}">…</div>
     ${mine ? `<button class="del">Delete task</button>` : ""}
   `;
@@ -771,11 +803,12 @@ function cardEl(task){
   const whoSpans = el.querySelectorAll(".whoinfo b");
   whoSpans[0].textContent = nameFor(task.assignee_id);
   whoSpans[1].textContent = nameFor(task.created_by);
+  loadAttachmentCount(task.id, el.querySelector(".attachcount"));
   loadCommentCount(task.id, el.querySelector(".commentcount"));
 
   el.addEventListener("click", (e) => {
     if (e.target.classList.contains("del")) return; // don't open modal when clicking delete
-    if (e.target.closest(".attachment")) return; // let the attachment link open normally
+    // (attachment count badge just opens the modal like the rest of the card)
     openTaskModal(task);
   });
 
@@ -797,6 +830,15 @@ function cardEl(task){
 async function loadCommentCount(taskId, node){
   const { count } = await sb.from("comments").select("*", { count: "exact", head: true }).eq("task_id", taskId);
   node.textContent = `💬 ${count || 0} comment${count === 1 ? "" : "s"}`;
+}
+
+async function loadAttachmentCount(taskId, node){
+  const { count } = await sb.from("task_attachments").select("*", { count: "exact", head: true }).eq("task_id", taskId);
+  if (count && count > 0) {
+    node.textContent = `📎 ${count} attachment${count === 1 ? "" : "s"}`;
+  } else {
+    node.textContent = "";
+  }
 }
 
 document.querySelectorAll(".col").forEach(col => {
@@ -881,10 +923,19 @@ $("#addTaskBtn").onclick = async () => {
     }
   }
 
-  await sb.from("tasks").insert({
-    title, assignee_id, due_date, status: "todo", created_by: currentUser.id,
-    attachment_url, attachment_name, attachment_type
-  });
+  const { data: newTask } = await sb.from("tasks")
+    .insert({ title, assignee_id, due_date, status: "todo", created_by: currentUser.id })
+    .select()
+    .single();
+
+  // Attaching at creation now goes into the same one-to-many
+  // attachments table used for adding more later.
+  if (newTask && attachment_url) {
+    await sb.from("task_attachments").insert({
+      task_id: newTask.id, added_by: currentUser.id,
+      url: attachment_url, name: attachment_name, type: attachment_type
+    });
+  }
 
   $("#taskTitle").value = "";
   $("#taskDue").value = "";
@@ -910,58 +961,24 @@ async function openTaskModal(task){
 
   const canEdit = task.created_by === currentUser.id || task.assignee_id === currentUser.id;
   $("#editTaskForm").classList.add("hidden");
+  $("#modalAttachRow").classList.add("hidden");
   if (canEdit) {
     $("#editTaskBtn").classList.remove("hidden");
+    $("#addAttachmentBtn").classList.remove("hidden");
   } else {
     $("#editTaskBtn").classList.add("hidden");
+    $("#addAttachmentBtn").classList.add("hidden");
   }
 
   await loadComments(task.id);
+  await loadAttachments(task.id);
 }
-
-let editAttachMode = "link";
-let editPendingFile = null;
 
 $("#editTaskBtn").onclick = () => {
   $("#editTitleInput").value = openTaskData.title;
   $("#editDueInput").value = openTaskData.due_date || "";
-  $("#editAttachLinkInput").value = "";
-  $("#editAttachFileInput").value = "";
-  $("#editAttachStatus").textContent = "";
-  editPendingFile = null;
-  editAttachMode = "link";
-  $("#editAttachTabLink").classList.add("active");
-  $("#editAttachTabFile").classList.remove("active");
-  $("#editAttachLinkInput").classList.remove("hidden");
-  $("#editAttachFileInput").classList.add("hidden");
-
-  $("#editAttachCurrent").textContent = openTaskData.attachment_url
-    ? ("Current attachment: " + (openTaskData.attachment_name || "Attachment") + " (saving again will replace it)")
-    : "No attachment yet.";
-
   $("#editTaskForm").classList.remove("hidden");
   $("#editTaskBtn").classList.add("hidden");
-};
-
-$("#editAttachTabLink").onclick = () => {
-  editAttachMode = "link";
-  $("#editAttachTabLink").classList.add("active");
-  $("#editAttachTabFile").classList.remove("active");
-  $("#editAttachLinkInput").classList.remove("hidden");
-  $("#editAttachFileInput").classList.add("hidden");
-};
-
-$("#editAttachTabFile").onclick = () => {
-  editAttachMode = "file";
-  $("#editAttachTabFile").classList.add("active");
-  $("#editAttachTabLink").classList.remove("active");
-  $("#editAttachFileInput").classList.remove("hidden");
-  $("#editAttachLinkInput").classList.add("hidden");
-};
-
-$("#editAttachFileInput").onchange = (e) => {
-  editPendingFile = e.target.files[0] || null;
-  $("#editAttachStatus").textContent = editPendingFile ? ("Selected: " + editPendingFile.name) : "";
 };
 
 $("#editCancelBtn").onclick = () => {
@@ -973,39 +990,124 @@ $("#editSaveBtn").onclick = async () => {
   const newTitle = $("#editTitleInput").value.trim();
   if (!newTitle) return;
   const newDue = $("#editDueInput").value || null;
-
-  const updates = { title: newTitle, due_date: newDue };
-
-  if (editAttachMode === "link" && $("#editAttachLinkInput").value.trim()) {
-    updates.attachment_url = $("#editAttachLinkInput").value.trim();
-    updates.attachment_name = "Link";
-    updates.attachment_type = "link";
-  } else if (editAttachMode === "file" && editPendingFile) {
-    $("#editAttachStatus").textContent = "Uploading...";
-    const path = Date.now() + "_" + editPendingFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const { error } = await sb.storage.from("task-attachments").upload(path, editPendingFile);
-    if (!error) {
-      const { data } = sb.storage.from("task-attachments").getPublicUrl(path);
-      updates.attachment_url = data.publicUrl;
-      updates.attachment_name = editPendingFile.name;
-      updates.attachment_type = "file";
-    } else {
-      $("#editAttachStatus").textContent = "Upload failed: " + error.message;
-    }
-  }
-
-  await sb.from("tasks").update(updates).eq("id", openTaskId);
+  await sb.from("tasks").update({ title: newTitle, due_date: newDue }).eq("id", openTaskId);
   $("#modalTitle").textContent = newTitle;
   $("#editTaskForm").classList.add("hidden");
   $("#editTaskBtn").classList.remove("hidden");
-  Object.assign(openTaskData, updates);
+  openTaskData.title = newTitle;
+  openTaskData.due_date = newDue;
   await refreshTasks();
   await refreshSummary();
+};
+
+// ---------- Attachments (independent of editing, one-to-many) ----------
+async function loadAttachments(taskId){
+  const { data } = await sb.from("task_attachments").select("*").eq("task_id", taskId).order("created_at");
+  const list = $("#attachmentsList");
+  list.innerHTML = "";
+
+  if (!data || !data.length) {
+    list.innerHTML = `<div class="attachmentsEmpty">No attachments yet.</div>`;
+    return;
+  }
+
+  data.forEach(att => {
+    const mine = att.added_by === currentUser.id;
+    const el = document.createElement("div");
+    el.className = "attachmentItem";
+    el.innerHTML = `
+      <a href="${att.url}" target="_blank" rel="noopener">${att.type === 'file' ? '📎' : '🔗'} ${att.name || 'Attachment'}</a>
+      <span class="addedBy">${nameFor(att.added_by)}</span>
+      ${mine ? '<button class="delAttach">Remove</button>' : ''}
+    `;
+    if (mine) {
+      el.querySelector(".delAttach").onclick = async () => {
+        const ok = await confirmDialog("Remove this attachment?");
+        if (!ok) return;
+        await sb.from("task_attachments").delete().eq("id", att.id);
+        await loadAttachments(taskId);
+      };
+    }
+    list.appendChild(el);
+  });
+}
+
+let modalAttachMode = "link";
+let modalPendingFile = null;
+
+$("#addAttachmentBtn").onclick = () => {
+  $("#modalAttachRow").classList.toggle("hidden");
+  $("#modalAttachLinkInput").value = "";
+  $("#modalAttachFileInput").value = "";
+  $("#modalAttachStatus").textContent = "";
+  modalPendingFile = null;
+  modalAttachMode = "link";
+  $("#modalAttachTabLink").classList.add("active");
+  $("#modalAttachTabFile").classList.remove("active");
+  $("#modalAttachLinkInput").classList.remove("hidden");
+  $("#modalAttachFileInput").classList.add("hidden");
+};
+
+$("#modalAttachCancelBtn").onclick = () => {
+  $("#modalAttachRow").classList.add("hidden");
+};
+
+$("#modalAttachTabLink").onclick = () => {
+  modalAttachMode = "link";
+  $("#modalAttachTabLink").classList.add("active");
+  $("#modalAttachTabFile").classList.remove("active");
+  $("#modalAttachLinkInput").classList.remove("hidden");
+  $("#modalAttachFileInput").classList.add("hidden");
+};
+
+$("#modalAttachTabFile").onclick = () => {
+  modalAttachMode = "file";
+  $("#modalAttachTabFile").classList.add("active");
+  $("#modalAttachTabLink").classList.remove("active");
+  $("#modalAttachFileInput").classList.remove("hidden");
+  $("#modalAttachLinkInput").classList.add("hidden");
+};
+
+$("#modalAttachFileInput").onchange = (e) => {
+  modalPendingFile = e.target.files[0] || null;
+  $("#modalAttachStatus").textContent = modalPendingFile ? ("Selected: " + modalPendingFile.name) : "";
+};
+
+$("#modalAttachSaveBtn").onclick = async () => {
+  if (!openTaskId) return;
+  let url = null, name = null, type = null;
+
+  if (modalAttachMode === "link" && $("#modalAttachLinkInput").value.trim()) {
+    url = $("#modalAttachLinkInput").value.trim();
+    name = "Link";
+    type = "link";
+  } else if (modalAttachMode === "file" && modalPendingFile) {
+    $("#modalAttachStatus").textContent = "Uploading...";
+    const path = Date.now() + "_" + modalPendingFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const { error } = await sb.storage.from("task-attachments").upload(path, modalPendingFile);
+    if (!error) {
+      const { data } = sb.storage.from("task-attachments").getPublicUrl(path);
+      url = data.publicUrl;
+      name = modalPendingFile.name;
+      type = "file";
+    } else {
+      $("#modalAttachStatus").textContent = "Upload failed: " + error.message;
+      return;
+    }
+  } else {
+    return;
+  }
+
+  await sb.from("task_attachments").insert({ task_id: openTaskId, added_by: currentUser.id, url, name, type });
+  $("#modalAttachRow").classList.add("hidden");
+  await loadAttachments(openTaskId);
+  await refreshTasks();
 };
 
 $("#modalClose").onclick = () => {
   $("#modalOverlay").classList.add("hidden");
   $("#editTaskForm").classList.add("hidden");
+  $("#modalAttachRow").classList.add("hidden");
   openTaskId = null;
   openTaskData = null;
 };
