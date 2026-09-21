@@ -498,6 +498,74 @@ let statusChannel = null;
 
 const $ = (sel) => document.querySelector(sel);
 
+// ---------- Notification sounds (generated tones, no audio file needed) ----------
+let audioCtx = null;
+function ensureAudioCtx(){
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e) { audioCtx = null; }
+  }
+  return audioCtx;
+}
+// Unlock/resume audio on the first real click anywhere, since browsers
+// block sound until the user has interacted with the page at least once.
+document.addEventListener("click", () => {
+  const ctx = ensureAudioCtx();
+  if (ctx && ctx.state === "suspended") ctx.resume();
+}, { once: true });
+
+function playTone(freq, duration, delay = 0, volume = 0.15){
+  const ctx = ensureAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.value = freq;
+  gain.gain.value = volume;
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  const startAt = ctx.currentTime + delay;
+  osc.start(startAt);
+  osc.stop(startAt + duration);
+}
+
+// A richer bell-like tone: a fundamental + a soft overtone, with a
+// quick attack and a natural exponential decay, instead of a flat beep.
+function playChime(freq, duration, delay = 0, volume = 0.18){
+  const ctx = ensureAudioCtx();
+  if (!ctx) return;
+  const startAt = ctx.currentTime + delay;
+
+  [{ f: freq, v: volume }, { f: freq * 2.4, v: volume * 0.35 }].forEach(({ f, v }) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = f;
+    gain.gain.setValueAtTime(0, startAt);
+    gain.gain.linearRampToValueAtTime(v, startAt + 0.015);       // quick attack
+    gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration); // natural decay
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(startAt);
+    osc.stop(startAt + duration + 0.05);
+  });
+}
+
+// A soft, friendly two-note "ding-dong" chime for a new mention,
+// like a doorbell rather than a beep.
+function playMentionSound(){
+  playChime(783.99, 0.5, 0);      // G5
+  playChime(659.25, 0.7, 0.16);   // E5
+}
+
+// A distinct, slightly more urgent triple-chime for an overdue break,
+// still pleasant, not alarming, three quick descending notes.
+function playBreakOverSound(){
+  playChime(880.00, 0.35, 0);      // A5
+  playChime(698.46, 0.35, 0.18);   // F5
+  playChime(523.25, 0.55, 0.36);   // C5
+}
+
 // ---------- Reusable Yes/No confirm popup ----------
 function confirmDialog(message){
   return new Promise((resolve) => {
@@ -728,6 +796,8 @@ function updateBreakUI(mine){
 
 function startBreakTimer(breakStartIso){
   const startTime = new Date(breakStartIso).getTime();
+  let hasAlertedOverBreak = false;
+
   const tick = () => {
     const elapsed = Date.now() - startTime;
     const totalSec = Math.floor(elapsed / 1000);
@@ -740,6 +810,12 @@ function startBreakTimer(breakStartIso){
       const overSec = String(Math.floor((overBy % 60000) / 1000)).padStart(2, "0");
       timerEl.textContent = `On break: ${mm}:${ss} — OVER by ${overMin}:${overSec}`;
       timerEl.classList.add("over");
+      // Play the alert exactly once, the moment it first crosses 60 minutes,
+      // not every second after that.
+      if (!hasAlertedOverBreak) {
+        hasAlertedOverBreak = true;
+        playBreakOverSound();
+      }
     } else {
       timerEl.textContent = `On break: ${mm}:${ss} / 60:00`;
       timerEl.classList.remove("over");
@@ -1402,7 +1478,11 @@ function subscribeRealtime(){
     .on("postgres_changes", { event: "*", schema: "public", table: "comments" }, () => { refreshTasks(); refreshSummary(); })
     .subscribe();
   sb.channel("notifications-changes")
-    .on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `recipient_id=eq.${currentUser.id}` }, () => refreshNotifications())
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: `recipient_id=eq.${currentUser.id}` }, () => {
+      playMentionSound();
+      refreshNotifications();
+    })
+    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "notifications", filter: `recipient_id=eq.${currentUser.id}` }, () => refreshNotifications())
     .subscribe();
 }
 </script>
