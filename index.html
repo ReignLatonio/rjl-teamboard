@@ -361,6 +361,7 @@
       </div>
     </div>
     <div class="whoami">
+      <button id="enablePushBtn" class="hidden" title="Get notified even when this tab is closed">🔕 Enable alerts</button>
       <div class="bellWrap">
         <button id="bellBtn" title="Notifications">🔔<span class="bellCount hidden" id="bellCount">0</span></button>
         <div class="bellDropdown hidden" id="bellDropdown"></div>
@@ -664,6 +665,72 @@ async function boot(user){
   await refreshSummary();
   await refreshNotifications();
   subscribeRealtime();
+  initPush();
+}
+
+// ---------- Push notifications (work even with the tab closed) ----------
+const VAPID_PUBLIC_KEY = "BK9us9-Y0NAyJSqNDvvQ9lR_1OCDYTlppszIwoBiBmHntftg8ULC6hVqAFUGQeDGs5AdMtyLUNZrXvBOTNUIkgE";
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+}
+
+async function initPush(){
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+
+  try {
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    const existing = await reg.pushManager.getSubscription();
+
+    if (existing) {
+      $("#enablePushBtn").classList.add("hidden");
+      await savePushSubscription(existing);
+    } else if (Notification.permission !== "denied") {
+      $("#enablePushBtn").classList.remove("hidden");
+    }
+  } catch (e) {
+    console.error("push setup failed", e);
+  }
+}
+
+$("#enablePushBtn").onclick = async () => {
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return;
+
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+    });
+
+    await savePushSubscription(sub);
+    $("#enablePushBtn").classList.add("hidden");
+  } catch (e) {
+    console.error("enabling push failed", e);
+    alert("Couldn't enable alerts. Try again, or check your browser's notification permission for this site.");
+  }
+};
+
+async function savePushSubscription(sub){
+  const json = sub.toJSON();
+  await sb.from("push_subscriptions").upsert({
+    user_id: currentUser.id,
+    endpoint: json.endpoint,
+    p256dh: json.keys.p256dh,
+    auth: json.keys.auth,
+  }, { onConflict: "endpoint" });
+}
+
+async function sendPush(userId, title, body, tag){
+  try {
+    await sb.functions.invoke("send-push", {
+      body: { userId, title, body, url: "https://rjl-teamboard.vercel.app/", tag }
+    });
+  } catch (e) { console.error("push send failed", e); }
 }
 
 // ---------- Daily rotating manifestation quote ----------
@@ -1317,6 +1384,10 @@ $("#commentSubmit").onclick = async () => {
         });
       } catch (e) { console.error("mention email failed", e); }
     }
+
+    // Real push notification — works even if recipient has the
+    // tab closed entirely, as long as they've enabled alerts once.
+    sendPush(recipient.id, currentUser.name + " mentioned you", "\"" + openTaskData.title + "\": " + body, "mention");
   }
 
   // Commenting on a task clears any of YOUR OWN pending mentions on it,
