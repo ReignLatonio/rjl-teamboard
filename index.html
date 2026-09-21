@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RJL Team Board</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<meta name="theme-color" content="#1F0C4E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RJL Board">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -362,6 +369,7 @@
     </div>
     <div class="whoami">
       <button id="enablePushBtn" class="hidden" title="Get notified even when this tab is closed">🔕 Enable alerts</button>
+      <button id="installAppBtn" class="hidden" title="Install as an app">📲 Install App</button>
       <div class="bellWrap">
         <button id="bellBtn" title="Notifications">🔔<span class="bellCount hidden" id="bellCount">0</span></button>
         <div class="bellDropdown hidden" id="bellDropdown"></div>
@@ -518,6 +526,9 @@ document.addEventListener("click", () => {
 function playTone(freq, duration, delay = 0, volume = 0.15){
   const ctx = ensureAudioCtx();
   if (!ctx) return;
+  // If the browser hasn't unlocked audio yet (no click since page load),
+  // resume it now rather than staying silently blocked.
+  if (ctx.state === "suspended") { ctx.resume(); }
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.type = "sine";
@@ -535,6 +546,7 @@ function playTone(freq, duration, delay = 0, volume = 0.15){
 function playChime(freq, duration, delay = 0, volume = 0.18){
   const ctx = ensureAudioCtx();
   if (!ctx) return;
+  if (ctx.state === "suspended") { ctx.resume(); }
   const startAt = ctx.currentTime + delay;
 
   [{ f: freq, v: volume }, { f: freq * 2.4, v: volume * 0.35 }].forEach(({ f, v }) => {
@@ -695,6 +707,29 @@ async function initPush(){
     console.error("push setup failed", e);
   }
 }
+
+// ---------- Install as an app (Android / desktop Chrome) ----------
+// The browser fires this event only when the site is genuinely
+// installable and hasn't been installed yet.
+let deferredInstallPrompt = null;
+
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  $("#installAppBtn").classList.remove("hidden");
+});
+
+$("#installAppBtn").onclick = async () => {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  $("#installAppBtn").classList.add("hidden");
+};
+
+window.addEventListener("appinstalled", () => {
+  $("#installAppBtn").classList.add("hidden");
+});
 
 $("#enablePushBtn").onclick = async () => {
   try {
