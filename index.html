@@ -190,8 +190,9 @@
   .taskbar .btn{ width:auto; }
 
   .attachRow{
-    background:var(--card); border:1px solid var(--stroke); border-radius:14px; padding:12px 14px; margin-bottom:20px;
-    display:flex; flex-direction:column; gap:10px;
+    background:var(--card); border:1px solid rgba(255,46,99,.3); border-radius:14px; padding:12px 14px;
+    margin:-10px 0 20px; display:flex; flex-direction:column; gap:10px;
+    border-top-left-radius:4px; /* visually "hangs" from the Attach button above it */
   }
   .attachTabs{ display:flex; gap:8px; }
   .attachTab{
@@ -415,6 +416,16 @@
     <div class="editTaskForm hidden" id="editTaskForm">
       <input type="text" id="editTitleInput" placeholder="Task title">
       <input type="date" id="editDueInput">
+
+      <div class="attachTabs">
+        <button type="button" class="attachTab active" id="editAttachTabLink">Attach Link</button>
+        <button type="button" class="attachTab" id="editAttachTabFile">Attach File</button>
+      </div>
+      <input type="text" id="editAttachLinkInput" placeholder="Paste a Google Drive / Docs / any link">
+      <input type="file" id="editAttachFileInput" class="hidden">
+      <div class="attachStatus" id="editAttachStatus"></div>
+      <div class="attachStatus" id="editAttachCurrent"></div>
+
       <div class="modal-actions">
         <button class="btn secondary" id="editCancelBtn" style="width:auto;">Cancel</button>
         <button class="btn" id="editSaveBtn" style="width:auto;">Save changes</button>
@@ -908,11 +919,49 @@ async function openTaskModal(task){
   await loadComments(task.id);
 }
 
+let editAttachMode = "link";
+let editPendingFile = null;
+
 $("#editTaskBtn").onclick = () => {
   $("#editTitleInput").value = openTaskData.title;
   $("#editDueInput").value = openTaskData.due_date || "";
+  $("#editAttachLinkInput").value = "";
+  $("#editAttachFileInput").value = "";
+  $("#editAttachStatus").textContent = "";
+  editPendingFile = null;
+  editAttachMode = "link";
+  $("#editAttachTabLink").classList.add("active");
+  $("#editAttachTabFile").classList.remove("active");
+  $("#editAttachLinkInput").classList.remove("hidden");
+  $("#editAttachFileInput").classList.add("hidden");
+
+  $("#editAttachCurrent").textContent = openTaskData.attachment_url
+    ? ("Current attachment: " + (openTaskData.attachment_name || "Attachment") + " (saving again will replace it)")
+    : "No attachment yet.";
+
   $("#editTaskForm").classList.remove("hidden");
   $("#editTaskBtn").classList.add("hidden");
+};
+
+$("#editAttachTabLink").onclick = () => {
+  editAttachMode = "link";
+  $("#editAttachTabLink").classList.add("active");
+  $("#editAttachTabFile").classList.remove("active");
+  $("#editAttachLinkInput").classList.remove("hidden");
+  $("#editAttachFileInput").classList.add("hidden");
+};
+
+$("#editAttachTabFile").onclick = () => {
+  editAttachMode = "file";
+  $("#editAttachTabFile").classList.add("active");
+  $("#editAttachTabLink").classList.remove("active");
+  $("#editAttachFileInput").classList.remove("hidden");
+  $("#editAttachLinkInput").classList.add("hidden");
+};
+
+$("#editAttachFileInput").onchange = (e) => {
+  editPendingFile = e.target.files[0] || null;
+  $("#editAttachStatus").textContent = editPendingFile ? ("Selected: " + editPendingFile.name) : "";
 };
 
 $("#editCancelBtn").onclick = () => {
@@ -924,12 +973,32 @@ $("#editSaveBtn").onclick = async () => {
   const newTitle = $("#editTitleInput").value.trim();
   if (!newTitle) return;
   const newDue = $("#editDueInput").value || null;
-  await sb.from("tasks").update({ title: newTitle, due_date: newDue }).eq("id", openTaskId);
+
+  const updates = { title: newTitle, due_date: newDue };
+
+  if (editAttachMode === "link" && $("#editAttachLinkInput").value.trim()) {
+    updates.attachment_url = $("#editAttachLinkInput").value.trim();
+    updates.attachment_name = "Link";
+    updates.attachment_type = "link";
+  } else if (editAttachMode === "file" && editPendingFile) {
+    $("#editAttachStatus").textContent = "Uploading...";
+    const path = Date.now() + "_" + editPendingFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const { error } = await sb.storage.from("task-attachments").upload(path, editPendingFile);
+    if (!error) {
+      const { data } = sb.storage.from("task-attachments").getPublicUrl(path);
+      updates.attachment_url = data.publicUrl;
+      updates.attachment_name = editPendingFile.name;
+      updates.attachment_type = "file";
+    } else {
+      $("#editAttachStatus").textContent = "Upload failed: " + error.message;
+    }
+  }
+
+  await sb.from("tasks").update(updates).eq("id", openTaskId);
   $("#modalTitle").textContent = newTitle;
   $("#editTaskForm").classList.add("hidden");
   $("#editTaskBtn").classList.remove("hidden");
-  openTaskData.title = newTitle;
-  openTaskData.due_date = newDue;
+  Object.assign(openTaskData, updates);
   await refreshTasks();
   await refreshSummary();
 };
