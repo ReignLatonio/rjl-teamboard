@@ -1207,11 +1207,16 @@ $("#commentSubmit").onclick = async () => {
     .single();
 
   // Find every team member actually @mentioned in this comment,
-  // not just the assignee, and notify each one.
+  // not just the assignee, and notify each one. Matches either
+  // their first name (@Bryan) or their full name (@Bryan Apollo),
+  // since people naturally type mentions either way.
   const lowerBody = body.toLowerCase();
-  const mentionedProfiles = allProfiles.filter(p =>
-    p.id !== currentUser.id && lowerBody.includes("@" + p.name.toLowerCase())
-  );
+  const mentionedProfiles = allProfiles.filter(p => {
+    if (p.id === currentUser.id) return false;
+    const fullName = p.name.toLowerCase();
+    const firstName = fullName.split(" ")[0];
+    return lowerBody.includes("@" + fullName) || new RegExp("@" + firstName + "(\\s|$|[^a-z])").test(lowerBody);
+  });
 
   for (const recipient of mentionedProfiles) {
     await sb.from("notifications").insert({
