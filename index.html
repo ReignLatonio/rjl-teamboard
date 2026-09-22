@@ -261,6 +261,10 @@
   .card.mine{ cursor:grab; }
   .card.locked{ opacity:.7; }
   .card.dragging{ opacity:.35; transform:scale(.96); }
+  .card.touch-dragging{
+    opacity:.9; box-shadow:0 20px 50px rgba(0,0,0,.5); z-index:200; position:relative;
+    border-color:var(--pink); transition:none;
+  }
   .card .title{ font-weight:700; margin-bottom:8px; line-height:1.35; }
   .card .meta{ display:flex; justify-content:space-between; align-items:center; }
   .card .assignee{ display:inline-flex; gap:5px; padding:3px 10px; border-radius:999px; font-size:10px; font-weight:700;
@@ -983,7 +987,12 @@ function cardEl(task){
   const mine = task.created_by === currentUser.id || task.assignee_id === currentUser.id;
   const el = document.createElement("div");
   el.className = "card" + (mine ? " mine" : " locked");
-  el.draggable = mine;
+  // Only enable HTML5 drag-and-drop on devices with an actual mouse.
+  // On touch devices, "draggable" quietly blocks taps on things inside
+  // the card (like the move dropdown), so we leave it off there —
+  // touch users move cards with the dropdown instead.
+  const hasMouse = window.matchMedia("(pointer: fine)").matches;
+  el.draggable = mine && hasMouse;
   el.dataset.id = task.id;
   const due = task.due_date ? new Date(task.due_date).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : "No due date";
 
@@ -1028,6 +1037,8 @@ function cardEl(task){
     el.addEventListener("dragstart", () => el.classList.add("dragging"));
     el.addEventListener("dragend", () => el.classList.remove("dragging"));
 
+    enableTouchDrag(el, task);
+
     const moveSelect = el.querySelector(".moveSelect");
     moveSelect.addEventListener("click", (e) => e.stopPropagation());
     moveSelect.addEventListener("change", async (e) => {
@@ -1063,6 +1074,77 @@ async function loadAttachmentCount(taskId, node){
 
 // Shared move logic — used by both desktop drag-and-drop and the
 // tap-friendly move buttons (for mobile/touch, where drag doesn't work).
+// ---------- Real finger-drag for touch devices ----------
+// HTML5 drag-and-drop (used for desktop mice) doesn't exist on touch
+// screens at all, so this recreates the same "pick up and drop" feel
+// using raw touch events instead.
+function enableTouchDrag(el, task){
+  const DRAG_THRESHOLD = 12; // px of finger movement before it counts as a drag, not a tap
+  let startX = 0, startY = 0, isDragging = false, moved = false;
+
+  el.addEventListener("touchstart", (e) => {
+    // Don't hijack taps on the dropdown or delete button
+    if (e.target.closest(".moveSelect") || e.target.closest(".del")) return;
+    const t = e.touches[0];
+    startX = t.clientX;
+    startY = t.clientY;
+    isDragging = false;
+    moved = false;
+  }, { passive: true });
+
+  el.addEventListener("touchmove", (e) => {
+    if (e.target.closest(".moveSelect")) return;
+    const t = e.touches[0];
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+
+    if (!isDragging) {
+      if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
+        isDragging = true;
+        moved = true;
+        el.classList.add("touch-dragging");
+      } else {
+        return; // still just a tap/scroll, not a drag yet
+      }
+    }
+
+    e.preventDefault(); // stop the page from scrolling while actively dragging
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
+
+    // Highlight whichever column is currently under the finger
+    el.style.pointerEvents = "none";
+    const under = document.elementFromPoint(t.clientX, t.clientY);
+    el.style.pointerEvents = "";
+    document.querySelectorAll(".col").forEach(c => c.classList.remove("dragover"));
+    const col = under && under.closest(".col");
+    if (col) col.classList.add("dragover");
+  }, { passive: false });
+
+  el.addEventListener("touchend", async (e) => {
+    document.querySelectorAll(".col").forEach(c => c.classList.remove("dragover"));
+
+    if (isDragging) {
+      const t = e.changedTouches[0];
+      el.style.pointerEvents = "none";
+      const under = document.elementFromPoint(t.clientX, t.clientY);
+      el.style.pointerEvents = "";
+      const col = under && under.closest(".col");
+
+      el.classList.remove("touch-dragging");
+      el.style.transform = "";
+
+      if (col) {
+        await moveTaskToStatus(task.id, col.dataset.status);
+      }
+    }
+    isDragging = false;
+
+    // If the finger never moved past the threshold, let it act as a
+    // normal tap (opens the task modal) by doing nothing special here —
+    // the card's existing click handler fires on its own.
+  });
+}
+
 async function moveTaskToStatus(taskId, newStatus){
   const update = { status: newStatus };
   if (newStatus === "done") update.completed_at = new Date().toISOString();
