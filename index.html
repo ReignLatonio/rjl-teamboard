@@ -386,6 +386,7 @@
       </div>
       <span class="name" id="whoName"></span>
       <button id="editNameBtn" title="Edit your name">✎</button>
+      <button id="refreshAppBtn" title="Check for updates">🔄 Refresh</button>
       <button id="logoutBtn">Log out</button>
     </div>
   </header>
@@ -642,6 +643,16 @@ $("#authSubmit").onclick = async () => {
 };
 
 $("#logoutBtn").onclick = async () => { await sb.auth.signOut(); };
+
+$("#refreshAppBtn").onclick = async () => {
+  // Force a genuinely fresh reload, not a cached one — also nudges the
+  // service worker to check for an updated version of the app itself.
+  if ("serviceWorker" in navigator) {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg) await reg.update();
+  }
+  window.location.reload(true);
+};
 
 $("#editNameBtn").onclick = async () => {
   if (!currentUser) return;
