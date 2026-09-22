@@ -279,12 +279,6 @@
   }
   .card .del:hover{ color:var(--pink); }
   .card .commentcount{ font-size:11px; color:var(--muted); margin-top:6px; }
-  .card .moveSelect{
-    width:100%; margin-top:10px; font-family:var(--body); font-size:12px; font-weight:700;
-    border-radius:8px; border:1px solid rgba(255,46,99,.3); background:rgba(255,46,99,.08); color:var(--pink);
-    padding:7px 8px; cursor:pointer;
-  }
-  .card .moveSelect option{ background:#141420; color:#fff; font-weight:400; }
   .empty{ color:var(--muted); font-size:12px; text-align:center; padding:20px 6px; opacity:.6; }
 
   /* ---------- Today's Summary ---------- */
@@ -991,22 +985,11 @@ function cardEl(task){
   // On touch devices, "draggable" quietly blocks taps on things inside
   // the card (like the move dropdown), so we leave it off there —
   // touch users move cards with the dropdown instead.
-  const hasMouse = window.matchMedia("(pointer: fine)").matches;
-  el.draggable = mine && hasMouse;
+  // Drag-and-drop now works on both mouse and touch (see enableTouchDrag
+  // below), so this stays draggable for everyone who owns the card.
+  el.draggable = mine;
   el.dataset.id = task.id;
   const due = task.due_date ? new Date(task.due_date).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : "No due date";
-
-  const statusOptions = [
-    { value: "todo", label: "To Do" },
-    { value: "inprogress", label: "In Progress" },
-    { value: "review", label: "Review" },
-    { value: "done", label: "Done" },
-  ];
-  const moveDropdown = mine ? `
-    <select class="moveSelect" data-id="${task.id}">
-      ${statusOptions.map(o => `<option value="${o.value}" ${o.value === task.status ? "selected" : ""}>${o.label}</option>`).join("")}
-    </select>
-  ` : "";
 
   el.innerHTML = `
     <div class="title"></div>
@@ -1015,7 +998,6 @@ function cardEl(task){
     ${!mine ? `<div class="lockicon">🔒 you can view this, but only ${nameFor(task.assignee_id)} or its creator can move or delete it</div>` : ""}
     <div class="attachcount" data-id="${task.id}"></div>
     <div class="commentcount" data-id="${task.id}">…</div>
-    ${moveDropdown}
     ${mine ? `<button class="del">Delete task</button>` : ""}
   `;
   el.querySelector(".title").textContent = task.title;
@@ -1028,7 +1010,6 @@ function cardEl(task){
 
   el.addEventListener("click", (e) => {
     if (e.target.classList.contains("del")) return; // don't open modal when clicking delete
-    if (e.target.classList.contains("moveSelect")) return; // don't open modal when using the move dropdown
     // (attachment count badge just opens the modal like the rest of the card)
     openTaskModal(task);
   });
@@ -1038,13 +1019,6 @@ function cardEl(task){
     el.addEventListener("dragend", () => el.classList.remove("dragging"));
 
     enableTouchDrag(el, task);
-
-    const moveSelect = el.querySelector(".moveSelect");
-    moveSelect.addEventListener("click", (e) => e.stopPropagation());
-    moveSelect.addEventListener("change", async (e) => {
-      e.stopPropagation();
-      await moveTaskToStatus(task.id, moveSelect.value);
-    });
 
     el.querySelector(".del").onclick = async (e) => {
       e.stopPropagation();
@@ -1084,7 +1058,7 @@ function enableTouchDrag(el, task){
 
   el.addEventListener("touchstart", (e) => {
     // Don't hijack taps on the dropdown or delete button
-    if (e.target.closest(".moveSelect") || e.target.closest(".del")) return;
+    if (e.target.closest(".del")) return;
     const t = e.touches[0];
     startX = t.clientX;
     startY = t.clientY;
@@ -1093,7 +1067,6 @@ function enableTouchDrag(el, task){
   }, { passive: true });
 
   el.addEventListener("touchmove", (e) => {
-    if (e.target.closest(".moveSelect")) return;
     const t = e.touches[0];
     const dx = t.clientX - startX;
     const dy = t.clientY - startY;
