@@ -271,11 +271,16 @@
   .card .whoinfo b{ color:var(--text); font-weight:600; }
   .card .del{
     background:none; border:none; color:var(--muted); cursor:pointer; font-size:11px; padding:0; margin-top:8px;
-    text-decoration:underline; opacity:0; transition:opacity .2s var(--ease);
+    text-decoration:underline;
   }
-  .card:hover .del{ opacity:1; }
   .card .del:hover{ color:var(--pink); }
   .card .commentcount{ font-size:11px; color:var(--muted); margin-top:6px; }
+  .card .moveSelect{
+    width:100%; margin-top:10px; font-family:var(--body); font-size:12px; font-weight:700;
+    border-radius:8px; border:1px solid rgba(255,46,99,.3); background:rgba(255,46,99,.08); color:var(--pink);
+    padding:7px 8px; cursor:pointer;
+  }
+  .card .moveSelect option{ background:#141420; color:#fff; font-weight:400; }
   .empty{ color:var(--muted); font-size:12px; text-align:center; padding:20px 6px; opacity:.6; }
 
   /* ---------- Today's Summary ---------- */
@@ -949,9 +954,23 @@ async function refreshTasks(){
 }
 
 function renderBoard(tasks){
+  // "Done" should only show what was actually completed TODAY, so the
+  // board resets cleanly each day instead of piling up old completions.
+  const startOfToday = new Date(); startOfToday.setHours(0,0,0,0);
+  const endOfToday = new Date(); endOfToday.setHours(23,59,59,999);
+
   document.querySelectorAll(".col").forEach(col => {
     const status = col.dataset.status;
-    const list = tasks.filter(t => t.status === status);
+    let list = tasks.filter(t => t.status === status);
+
+    if (status === "done") {
+      list = list.filter(t => {
+        if (!t.completed_at) return false;
+        const c = new Date(t.completed_at);
+        return c >= startOfToday && c <= endOfToday;
+      });
+    }
+
     const wrap = col.querySelector(".cards");
     wrap.innerHTML = "";
     col.querySelector(".count").textContent = list.length;
@@ -967,6 +986,19 @@ function cardEl(task){
   el.draggable = mine;
   el.dataset.id = task.id;
   const due = task.due_date ? new Date(task.due_date).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : "No due date";
+
+  const statusOptions = [
+    { value: "todo", label: "To Do" },
+    { value: "inprogress", label: "In Progress" },
+    { value: "review", label: "Review" },
+    { value: "done", label: "Done" },
+  ];
+  const moveDropdown = mine ? `
+    <select class="moveSelect" data-id="${task.id}">
+      ${statusOptions.map(o => `<option value="${o.value}" ${o.value === task.status ? "selected" : ""}>${o.label}</option>`).join("")}
+    </select>
+  ` : "";
+
   el.innerHTML = `
     <div class="title"></div>
     <div class="meta"><span class="assignee"></span><span class="due">${due}</span></div>
@@ -974,6 +1006,7 @@ function cardEl(task){
     ${!mine ? `<div class="lockicon">🔒 you can view this, but only ${nameFor(task.assignee_id)} or its creator can move or delete it</div>` : ""}
     <div class="attachcount" data-id="${task.id}"></div>
     <div class="commentcount" data-id="${task.id}">…</div>
+    ${moveDropdown}
     ${mine ? `<button class="del">Delete task</button>` : ""}
   `;
   el.querySelector(".title").textContent = task.title;
@@ -986,6 +1019,7 @@ function cardEl(task){
 
   el.addEventListener("click", (e) => {
     if (e.target.classList.contains("del")) return; // don't open modal when clicking delete
+    if (e.target.classList.contains("moveSelect")) return; // don't open modal when using the move dropdown
     // (attachment count badge just opens the modal like the rest of the card)
     openTaskModal(task);
   });
@@ -993,6 +1027,14 @@ function cardEl(task){
   if (mine) {
     el.addEventListener("dragstart", () => el.classList.add("dragging"));
     el.addEventListener("dragend", () => el.classList.remove("dragging"));
+
+    const moveSelect = el.querySelector(".moveSelect");
+    moveSelect.addEventListener("click", (e) => e.stopPropagation());
+    moveSelect.addEventListener("change", async (e) => {
+      e.stopPropagation();
+      await moveTaskToStatus(task.id, moveSelect.value);
+    });
+
     el.querySelector(".del").onclick = async (e) => {
       e.stopPropagation();
       const ok = await confirmDialog(`Are you sure you want to delete "${task.title}"? This can't be undone.`);
@@ -1019,6 +1061,17 @@ async function loadAttachmentCount(taskId, node){
   }
 }
 
+// Shared move logic — used by both desktop drag-and-drop and the
+// tap-friendly move buttons (for mobile/touch, where drag doesn't work).
+async function moveTaskToStatus(taskId, newStatus){
+  const update = { status: newStatus };
+  if (newStatus === "done") update.completed_at = new Date().toISOString();
+  if (newStatus !== "done") update.completed_at = null;
+  await sb.from("tasks").update(update).eq("id", taskId);
+  await refreshTasks();
+  await refreshSummary();
+}
+
 document.querySelectorAll(".col").forEach(col => {
   col.addEventListener("dragover", (e) => { e.preventDefault(); col.classList.add("dragover"); });
   col.addEventListener("dragleave", () => col.classList.remove("dragover"));
@@ -1027,14 +1080,7 @@ document.querySelectorAll(".col").forEach(col => {
     col.classList.remove("dragover");
     const dragging = document.querySelector(".card.dragging");
     if (!dragging) return;
-    const id = dragging.dataset.id;
-    const newStatus = col.dataset.status;
-    const update = { status: newStatus };
-    if (newStatus === "done") update.completed_at = new Date().toISOString();
-    if (newStatus !== "done") update.completed_at = null;
-    await sb.from("tasks").update(update).eq("id", id);
-    await refreshTasks();      // instant refresh for you, no reload needed
-    await refreshSummary();
+    await moveTaskToStatus(dragging.dataset.id, col.dataset.status);
   });
 });
 
