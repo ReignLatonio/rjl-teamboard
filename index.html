@@ -258,7 +258,14 @@
     transition: transform .18s var(--ease), box-shadow .18s var(--ease), border-color .18s var(--ease);
   }
   .card:hover{ transform:translateY(-2px); border-color:rgba(255,255,255,.22); box-shadow:0 14px 30px rgba(0,0,0,.35); }
-  .card.mine{ cursor:grab; }
+  .card.mine{
+    cursor:grab;
+    /* Stop the phone's own text-select / scroll gestures from grabbing
+       the touch before our JS drag logic gets a chance to run. */
+    touch-action: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+  }
   .card.locked{ opacity:.7; }
   .card.dragging{ opacity:.35; transform:scale(.96); }
   .card.touch-dragging{
